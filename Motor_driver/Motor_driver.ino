@@ -4,31 +4,53 @@
 #include "Motor.h"
 #include "pid.h"
 #include "commands.h"
+///////////////////////
 
+#define BAUDRATE 115200
+
+//variables para decodificar los comandos recibidos en el serial
+int arg = 0;
+int index = 0;
+
+// variable para retener un char
+char chr;
+
+char cmd;
+char cmd1[16];
+
+char argv1[16];
+char argv2[16];
+String auxstr;
+String strs[4];
+double arg1;
+double arg2;
+
+///////////////////////
 float long_eje = 0.2275; // distancias entre ruedas en metros
 const byte MOTOR_IZQ = 2;  // izq//Motor 2 Interrupt Pin - INT 1 - Right Motor
 const byte MOTOR_DER = 3;  // Motor 1 Interrupt Pin - INT 0 - Left Motor
 
 
-#define LOOPTIME 10
-
+#define LOOPTIME 10 
 ////////////////////
 //     (in1,in2,enb,encoder)
 //(       in1, in2, en, en_a, en_b)
 Motor right(9,   10,  8 ,  3,  48);
-Motor left(6,  7,   5 ,  2,  49);
+Motor left( 6,    7,  5 ,  2,  49);
 
 volatile long encoder0Pos = 0;    // encoder 1
 volatile long encoder1Pos = 0;    // encoder 2
 /// Constantes para el control PID/////////
+volatile double sp1,sp2; ///     
+                                         
 double left_kp =10, left_ki = 0.95 , left_kd = 10.2;             // modify for optimal performance
 double right_kp = 14.1 , right_ki = 1.03 , right_kd = 10;
 
 double right_input = 0, right_output = 0, right_setpoint = 0;
-pid control_der(right_kp, right_ki, right_kd);
+pid control_der;
 
 double left_input = 0, left_output = 0, left_setpoint = 0;
-pid control_izq  (left_kp, left_ki, left_kd);
+pid control_izq;
 ////////////////////////////////////////////////////////////////////////////////////////
 /// Variables para medir las velocidades del motor//////////////////////////////////////
 double v_lineal = 0;
@@ -42,15 +64,23 @@ unsigned long prevMillis;
 float encoder0Diff;
 float encoder1Diff;
 
+float encoder0Count;
+float encoder1Count;
+
 float encoder0Error;
 float encoder1Error;
 
 float encoder0Prev;
 float encoder1Prev;
 
+double num_enc_count_0 =0;
+double num_enc_count_1 =0;
+
 double speed_act_left = 0;   //Actual speed for left wheel in m/s
 double speed_act_right = 0;  //Command speed for left wheel in m/s 
 
+double fre_ang_left = 0;   //Actual ang speed for left wheel in hz
+double fre_ang_right = 0;  //Command  speed for left wheel in hz
 
 /* Clear the current command parameters */
 void resetCommand() {
@@ -69,6 +99,8 @@ int runCommand() {
   char *p = argv1;
   char *str;
   int pid_args[4];
+  strs[1].toCharArray(argv1,16);
+  strs[2].toCharArray(argv2,16);
   arg1 = atoi(argv1);
   arg2 = atoi(argv2);
   
@@ -97,48 +129,61 @@ int runCommand() {
     Serial.println("OK");
     break;
   case PING:
-    Serial.println(Ping(arg1));
+    //Serial.println(Ping(arg1));
     break;
 
   case SERVO_WRITE:
-    servos[arg1].setTargetPosition(arg2);
-    Serial.println("OK");
+    //servos[arg1].setTargetPosition(arg2);
+    //Serial.println("OK");
     break;
   case SERVO_READ:
-    Serial.println(servos[arg1].getServo().read());
-    break;
-
     
+    break;
 
   case READ_ENCODERS:
-    Serial.print(readEncoder(LEFT));
+    
+    Serial.print(encoder0Pos );//cuenta contador encoder izq
     Serial.print(" ");
-    Serial.println(readEncoder(RIGHT));
+    Serial.println(encoder1Pos);//cuenta contador encoder der
     break;
    case RESET_ENCODERS:
-    resetEncoders();
-    resetPID();
+    
+    encoder0Pos = 0;
+    encoder1Pos = 0;
     Serial.println("OK");
     break;
   case MOTOR_SPEEDS:
     /* Reset the auto stop timer */
-    lastMotorCommand = millis();
+    
+
     if (arg1 == 0 && arg2 == 0) {
-      setMotorSpeeds(0, 0);
-      resetPID();
-      moving = 0;
+      //setMotorSpeeds(0, 0);
+      //resetPID();
+      
+      control_izq.moving = 0;
+      control_der.moving = 0;
+      Serial.println("OK"); 
+      sp1=0;
+      sp2=0;
     }
-    else moving = 1;
-    leftPID.TargetTicksPerFrame = arg1;
-    rightPID.TargetTicksPerFrame = arg2;
-    Serial.println("OK"); 
+    else{
+      //Serial.print("arg1: ");Serial.print(arg1);Serial.print("   encoder0Count: ");Serial.println(encoder0Count);
+        control_izq.moving = 1;
+        control_der.moving = 1;
+        sp1=arg1;
+        sp2=arg2;
+      
+      
+      Serial.println("OK"); 
+    }
     break;
   case MOTOR_RAW_PWM:
     /* Reset the auto stop timer */
-    lastMotorCommand = millis();
-    resetPID();
-    moving = 0; // Sneaky way to temporarily disable the PID
-    setMotorSpeeds(arg1, arg2);
+     
+    control_izq.moving = 0;
+    control_der.moving = 0;
+    sp1 = arg1;
+    sp2 = arg2;
     Serial.println("OK"); 
     break;
   case UPDATE_PID:
@@ -146,11 +191,11 @@ int runCommand() {
        pid_args[i] = atoi(str);
        i++;
     }
-    Kp = pid_args[0];
-    Kd = pid_args[1];
-    Ki = pid_args[2];
-    Ko = pid_args[3];
-    Serial.println("OK");
+//    control_izq.kp = 10;control_izq.kd = 0;control_izq.ki = 10;
+//    control_izq.ko = 1;
+//    control_der.kp = 10;control_der.kd = 0;control_der.ki = 10;
+//    control_der.ko = 1;
+    Serial.println("Parametros fijos, revisar el arduino ide");
     break;
 
   default:
@@ -160,8 +205,11 @@ int runCommand() {
 }
  
 void setup() {
-  Serial.begin(115200);
-
+  Serial.begin(BAUDRATE);
+    control_izq.kp = 10/*5*/;control_izq.kd = 1;control_izq.ki = 0.0001;
+    control_izq.ko = 1;               //1                 0.91
+    control_der.kp = 10/*5*/;control_der.kd = 1;control_der.ki = 0.0001;
+    control_der.ko = 1;               //1                 0.91
   attachInterrupt(digitalPinToInterrupt(left.en_a), change_left_a, RISING);
   attachInterrupt(digitalPinToInterrupt(right.en_a), change_right_a, RISING);
 //  attachInterrupt(digitalPinToInterrupt(right.encoder), change_right, CHANGE);
@@ -169,46 +217,32 @@ void setup() {
 }
 
 void loop() {
- 
-    while (Serial.available() > 0) {
-    
-    // Read the next character
-    chr = Serial.read();
 
-    // Terminate a command with a CR
-    if (chr == 13) {
-      if (arg == 1) argv1[index] = NULL;
-      else if (arg == 2) argv2[index] = NULL;
+
+
+    int StringCount = 0;
+  if (Serial.available() > 0) {
+    auxstr= Serial.readString();
+    while(auxstr.length()>0){
+//      chr = Serial.read();
+      int auxindex =auxstr.indexOf(' ');
+      if (auxindex == -1)
+        {
+        strs[StringCount++]=auxstr;
+        break;
+        }
+       else
+        {
+        strs[StringCount++]=auxstr.substring(0,auxindex);
+        auxstr = auxstr.substring(auxindex+1);
+        }
+    }
+      strs[0].toCharArray(cmd1,16);
+      cmd = cmd1[0];
       runCommand();
       resetCommand();
-    }
-    // Use spaces to delimit parts of the command
-    else if (chr == ' ') {
-      // Step through the arguments
-      if (arg == 0) arg = 1;
-      else if (arg == 1)  {
-        argv1[index] = NULL;
-        arg = 2;
-        index = 0;
-      }
-      continue;
-    }
-    else {
-      if (arg == 0) {
-        // The first arg is the single-letter command
-        cmd = chr;
-      }
-      else if (arg == 1) {
-        // Subsequent arguments can be more than one character
-        argv1[index] = chr;
-        index++;
-      }
-      else if (arg == 2) {
-        argv2[index] = chr;
-        index++;
-      }
-    }
   }
+  
   
   currentMillis = millis();
   if (currentMillis - prevMillis >= LOOPTIME){
@@ -216,35 +250,41 @@ void loop() {
   
     encoder0Diff = encoder0Pos - encoder0Prev; // Get difference between ticks to compute speed
     encoder1Diff = encoder1Pos - encoder1Prev;
+
+    encoder0Count = encoder0Diff*100;//cantidad de ticks por cada periodo del loop
+    encoder1Count = encoder1Diff*100;
+    
+
+
+    
     encoder0Diff = encoder0Diff/2958;//distancia en metros cada 10ms
     encoder1Diff = encoder1Diff/2958;
-
     
     speed_act_left = encoder0Diff*100;// (m/s)                  
     speed_act_right = encoder1Diff*100;// (m/s)
+
+    fre_ang_left = (speed_act_left/(0.0665/2.0))/(2*3.14);// radio en metros 
+    fre_ang_right =(speed_act_right/(0.0665/2.0))/(2*3.14);// radio en metros
+    //Serial.print("fre_ang_left : ");Serial.print(fre_ang_left);Serial.print(" fre_ang_right: ");Serial.println(fre_ang_right);
+//Serial.print("speed_act_left: ");Serial.print(speed_act_left);Serial.print(" speed_act_right: ");Serial.println(speed_act_right);    
                                                            // 2958 ticks en 1m = 8.83 en 10 ms izq
                                                             //                    8.42 en 10 ms der
     v_med= (speed_act_left + speed_act_right)/2;
-    v_ang_med = (speed_act_right - speed_act_left)/(long_eje);                                                          
-  
-    left_input = encoder0Diff;  //Input to PID controller is the current difference
-    right_input = encoder1Diff;
+    v_ang_med = (speed_act_right - speed_act_left)/(long_eje);   
+
+                                                           
+  /////*********** Se manda a la funcion PID los valores de referencia y velocidad medidad*******/////////////////////////////////////////////////////////////
+    left_output = control_izq.compute(sp1,encoder0Count);
+    right_output = control_der.compute(sp2,encoder1Count);
+    
+  //////**** Salida del PID********************////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    left.rotate(left_output);
+    right.rotate(right_output);
+
     encoder0Prev = encoder0Pos; // Saving values
     encoder1Prev = encoder1Pos;
-   
-   /// Calculo de los setpoints para cada motor 
-    left_setpoint = (2*v_lineal-v_ang*long_eje)/(2*R);
-    right_setpoint = (2/R)*v_lineal-left_setpoint ; 
-    left_setpoint = left_setpoint*30/3.14159265;
-    right_setpoint = right_setpoint*30/3.14159265;
-
   }
-   /// Salidad del control pid////
-  right_output = control_der.compute(right_setpoint,speed_act_right);
-  left_output = control_izq.compute(left_setpoint,speed_act_left);
-   /// señales de salida para los motores
-  left.rotate(left_output);
-  right.rotate(right_output);
+
    
 }
 

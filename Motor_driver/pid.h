@@ -11,13 +11,12 @@ class pid {
   public:
     //Constructor - Plus and Minus are the Motor output / en_a and en_b are the encoder inputs
     
-    pid(double kp ,double ki, double kd);
+    pid();
     //Spin the motor with a percentage value
-    int compute(double sp,double vel);
+    double compute(double sp,double vel);
     //control Inputs- plus is one direction and minus is the other
-    double kp;
-    double ki;
-    double kd;
+    double kp,ki,kd,ko;
+    unsigned int moving;
     unsigned long t_act,t_ant;
     
 };
